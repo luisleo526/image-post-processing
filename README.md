@@ -39,3 +39,10 @@ To build the optimized image processing module:
 ```
 python setup.py build_ext --inplace
 ```
+
+
+## Pyinstaller
+
+```
+pyinstaller --name "ImageProcessor" --onefile --windowed --add-data "image_processor.cp311-win_amd64.pyd;." main.py
+```

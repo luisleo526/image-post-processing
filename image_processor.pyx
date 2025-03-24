@@ -50,6 +50,101 @@ def fast_contrast_enhance(np.ndarray[np.uint8_t, ndim=2] img):
     result = cv2.convertScaleAbs(img, alpha=1.1, beta=5)
     return result
 
+def enhance_resolution(np.ndarray[np.uint8_t, ndim=2] img, int scale=2, str method="edgepreserving"):
+    """
+    Enhance resolution of denoised images for better clarity.
+    
+    Parameters:
+    -----------
+    img : numpy.ndarray
+        Input grayscale image
+    scale : int
+        Scale factor for upscaling (2 = 2x resolution)
+    method : str
+        Upscaling method: 'simple', 'edgepreserving', or 'detail'
+        
+    Returns:
+    --------
+    numpy.ndarray
+        Upscaled high-resolution image
+    """
+    cdef:
+        np.ndarray[np.uint8_t, ndim=2] upscaled
+        np.ndarray[np.uint8_t, ndim=2] sharpened
+        np.ndarray[np.uint8_t, ndim=2] edges
+        np.ndarray[np.uint8_t, ndim=2] edges_upscaled
+        np.ndarray[np.uint8_t, ndim=2] blurred
+        np.ndarray[np.float32_t, ndim=2] img_float
+        np.ndarray[np.float32_t, ndim=2] detail_enhanced
+        np.ndarray[np.float64_t, ndim=2] kernel
+        int height, width
+        int new_height, new_width
+    
+    # Get dimensions
+    height, width = img.shape[:2]
+    new_height, new_width = height * scale, width * scale
+    
+    # Simple bilinear/bicubic upscaling
+    if method == "simple":
+        upscaled = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+        return upscaled
+    
+    # Edge-preserving upscaling (best for text and symbols)
+    elif method == "edgepreserving":
+        # Step 1: Basic upscaling with INTER_CUBIC
+        upscaled = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_CUBIC)
+        
+        # Step 2: Edge detection on original image
+        edges = cv2.Canny(img, 50, 150)
+        
+        # Step 3: Upscale edges
+        edges_upscaled = cv2.resize(edges, (new_width, new_height), 
+                                    interpolation=cv2.INTER_NEAREST)
+        
+        # Step 4: Dilate edges slightly for better visibility
+        edges_upscaled = cv2.dilate(edges_upscaled, np.ones((2, 2), np.uint8), iterations=1)
+        
+        # Step 5: Apply unsharp masking to enhance edges in the upscaled image
+        blurred = cv2.GaussianBlur(upscaled, (0, 0), 3)
+        upscaled = cv2.addWeighted(upscaled, 1.5, blurred, -0.5, 0)
+        
+        # Step 6: Apply guided filter for edge-preserving smoothing
+        upscaled = cv2.bilateralFilter(upscaled, 5, 40, 40)
+        
+        # Step 7: Final contrast enhancement
+        upscaled = cv2.convertScaleAbs(upscaled, alpha=1.1, beta=5)
+        
+        return upscaled
+    
+    # Detail enhancement (more aggressive, can sometimes introduce artifacts)
+    elif method == "detail":
+        # Step 1: Upscale with Lanczos (preserves more details than cubic)
+        upscaled = cv2.resize(img, (new_width, new_height), interpolation=cv2.INTER_LANCZOS4)
+        
+        # Step 2: Apply detail enhancement with bilateral filtering
+        img_float = upscaled.astype(np.float32) / 255.0
+        
+        # This function might not be available in some OpenCV builds
+        try:
+            detail_enhanced = cv2.detailEnhance(img_float, sigma_s=10, sigma_r=0.15)
+            # Step 3: Convert back to uint8
+            upscaled = (detail_enhanced * 255).astype(np.uint8)
+        except AttributeError:
+            # Fallback if detailEnhance is not available
+            upscaled = cv2.bilateralFilter(upscaled, 9, 75, 75)
+        
+        # Step 4: Final sharpening
+        kernel = np.array([[-0.3, -0.3, -0.3], 
+                          [-0.3,  3.4, -0.3],
+                          [-0.3, -0.3, -0.3]], dtype=np.float64)
+        upscaled = cv2.filter2D(upscaled, -1, kernel)
+        
+        return upscaled
+    
+    # Default to edge-preserving if method not recognized
+    else:
+        return enhance_resolution(img, scale, "edgepreserving")
+
 # Improved implementation for card symbol enhancement
 def enhance_card_symbols(np.ndarray[np.uint8_t, ndim=2] gray_input):
     """

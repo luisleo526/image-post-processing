@@ -8,7 +8,7 @@ from PIL import Image, ImageTk, ImageGrab
 import threading
 from concurrent.futures import ThreadPoolExecutor
 import multiprocessing
-from image_processor import fast_denoise, fast_sharpen, fast_contrast_enhance, enhance_card_symbols, enhance_resolution
+from image_processor import fast_denoise, fast_sharpen, fast_contrast_enhance, enhance_resolution
 import time
 import keyboard
 import win32gui
@@ -22,6 +22,9 @@ from ctypes.wintypes import BOOL, HWND, RECT
 from functools import partial
 import re
 import traceback
+
+# Import ImageClarityPipeline from test.py 
+from pipeline import ImageClarityPipeline
 
 # Add more detailed Windows API access for PrintWindow
 user32 = ctypes.WinDLL('user32', use_last_error=True)
@@ -922,7 +925,7 @@ class ModernImageProcessor:
             if len(self.original_image.shape) == 3:
                 is_grayscale = np.allclose(self.original_image[:,:,0], self.original_image[:,:,1]) and \
                              np.allclose(self.original_image[:,:,1], self.original_image[:,:,2])
-                gray = cv2.cvtColor(self.original_image, cv2.COLOR_BGR2GRAY)
+                gray = cv2.cvtColor(self.original_image, cv2.COLOR_BGR2RGB)
             else:
                 gray = self.original_image.copy()
                 is_grayscale = True
@@ -935,27 +938,69 @@ class ModernImageProcessor:
             upscale_method = self.upscale_method.get()
             do_upscale = upscale_factor > 1
             
-            # Process based on selected enhancement mode
-            if self.enhancement_mode.get() == "card_symbols":
-                # Use specialized card symbol enhancement
-                self.root.after(0, lambda: self.status_label.config(text="Enhancing card symbols..."))
-                processed = enhance_card_symbols(gray)
-                self.progress_var.set(70)
-            else:
-                # Use standard denoising pipeline
-                self.root.after(0, lambda: self.status_label.config(text="Applying noise reduction..."))
-                denoised = fast_denoise(gray)
-                self.progress_var.set(40)
-                
-                # Apply sharpening
-                self.root.after(0, lambda: self.status_label.config(text="Enhancing details..."))
-                sharpened = fast_sharpen(denoised)
-                self.progress_var.set(60)
-                
-                # Apply contrast enhancement
-                self.root.after(0, lambda: self.status_label.config(text="Optimizing contrast..."))
-                processed = fast_contrast_enhance(sharpened)
-                self.progress_var.set(70)
+            # Use ImageClarityPipeline from test.py with improved pipeline structure
+            self.root.after(0, lambda: self.status_label.config(text="Processing with enhanced pipeline..."))
+            
+            # Create a temporary file to save the image
+            temp_input = "temp_input.jpg"
+            temp_output = "temp_output.jpg"
+            
+            cv2.imwrite(temp_input, gray)
+            
+            # Initialize the pipeline
+            pipeline = ImageClarityPipeline(temp_input)
+            self.progress_var.set(25)
+            
+            # Determine enhancement strength based on selected mode
+            enhancement_strength = 'medium'  # Default
+            
+            if self.enhancement_mode.get() == "standard_low":
+                enhancement_strength = 'low'
+                contrast_limit = 2.0
+                sharpen_alpha = 1.2
+                denoise_strength = 8
+            elif self.enhancement_mode.get() == "standard_high":
+                enhancement_strength = 'high'
+                contrast_limit = 4.0
+                sharpen_alpha = 1.8
+                denoise_strength = 15
+            else:  # medium/standard
+                contrast_limit = 3.0
+                sharpen_alpha = 1.5
+                denoise_strength = 12
+            
+            # Update UI
+            self.root.after(0, lambda: self.status_label.config(text=f"Applying {enhancement_strength} enhancement..."))
+            
+            # Execute the pipeline with method chaining
+            (pipeline
+                # Convert to grayscale if not already
+                .convert_to_grayscale()
+                # Initial contrast enhancement
+                .enhance_contrast(clip_limit=contrast_limit, tile_grid_size=(3, 3))
+                # Apply salt noise removal with median filter
+                .remove_salt_noise(kernel_size=5)
+                # Apply regular denoising for remaining noise
+                .apply_denoising(strength=denoise_strength)
+                # Apply light sharpening to restore details
+                .sharpen_image(kernel_size=3, alpha=sharpen_alpha)
+                # Final cleanup with opening operation to remove any remaining specks
+                .remove_noise(kernel_size=5)
+                # Save the result
+                .save_image(temp_output)
+            )
+            
+            self.progress_var.set(80)
+            
+            # Read the processed image
+            processed = cv2.imread(temp_output, cv2.IMREAD_GRAYSCALE)
+            
+            # Clean up temporary files
+            try:
+                os.remove(temp_input)
+                os.remove(temp_output)
+            except:
+                pass
             
             # Apply super-resolution if needed
             if do_upscale:
@@ -1216,13 +1261,21 @@ class ModernImageProcessor:
         # Mode selection
         ttk.Label(enhance_frame, text=self.translations["mode"], style="Subheader.TLabel").pack(anchor=tk.W, padx=padx, pady=(pady, 0))
         
+        # Update enhancement mode values
+        self.enhancement_mode = tk.StringVar(value="standard")
+        
         mode_frame = ttk.Frame(enhance_frame)
         mode_frame.pack(fill=tk.X, padx=padx, pady=pady)
         
-        ttk.Radiobutton(mode_frame, text=self.translations["standard"], variable=self.enhancement_mode, 
-                       value="standard").pack(side=tk.LEFT, padx=(0, int(10 * self.dpi_scale)))
-        ttk.Radiobutton(mode_frame, text=self.translations["card_symbols"], variable=self.enhancement_mode, 
-                       value="card_symbols").pack(side=tk.LEFT)
+        # Add more radio buttons for different enhancement strengths
+        ttk.Radiobutton(mode_frame, text="低強度", variable=self.enhancement_mode, 
+                       value="standard_low").pack(anchor=tk.W)
+        
+        ttk.Radiobutton(mode_frame, text="中強度", variable=self.enhancement_mode, 
+                       value="standard").pack(anchor=tk.W)
+        
+        ttk.Radiobutton(mode_frame, text="高強度", variable=self.enhancement_mode, 
+                       value="standard_high").pack(anchor=tk.W)
         
         # Upscale options
         ttk.Label(enhance_frame, text=self.translations["resolution_scale"], style="Subheader.TLabel").pack(anchor=tk.W, padx=padx, pady=(pady, 0))
